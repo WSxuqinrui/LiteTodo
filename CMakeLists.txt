@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.21)
 project(LiteTodo VERSION 0.4.1 LANGUAGES C CXX)
 
+# macOS 的平台适配和 FLTK 都含 Objective-C++，必须在依赖加入前于顶层启用。
+# 否则子目录先启用语言后，顶层可能缺少 CMAKE_OBJCXX_COMPILE_OBJECT 规则。
+if(APPLE)
+  enable_language(OBJCXX)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_BUILD_TYPE MinSizeRel CACHE STRING "Build type")
@@ -44,7 +50,6 @@ add_subdirectory(vendor/fltk-release-1.4.5 EXCLUDE_FROM_ALL)
 if(WIN32)
   set(PLATFORM_SOURCE src/platform_windows.cpp)
 elseif(APPLE)
-  enable_language(OBJCXX)
   set(PLATFORM_SOURCE src/platform_macos.mm)
 else()
   set(PLATFORM_SOURCE src/platform_linux.cpp)
