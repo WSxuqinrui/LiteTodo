@@ -1,0 +1,12 @@
+/build*/
+/dist/
+/vendor/
+/verification/
+*.sqlite3*
+__pycache__/
+*.py[cod]
+/data/
+/.litetodo-location
+/.env
+/.env.*
+/ball-position.txt
