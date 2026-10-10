@@ -40,8 +40,10 @@ def build_release(args, destination, release, dist):
     docs.mkdir(exist_ok=True)
     shutil.copy2(ROOT / "docs/interaction-reference.md", docs / "interaction-reference.md")
     shutil.copy2(ROOT / "docs/revision-design.md", docs / "revision-design.md")
+    if (ROOT / "docs/development.md").is_file():
+        shutil.copy2(ROOT / "docs/development.md", docs / "development.md")
     # 使用说明的本地图片一起发布，免安装包离线查看也不会出现失效引用。
-    for relative in ("assets/app.png", "docs/screenshots/main.png"):
+    for relative in ("assets/app.png", "docs/screenshots/main.png", "docs/screenshots/editor.png", "docs/screenshots/console.png"):
         source = ROOT / relative
         if source.is_file():
             output = destination / relative
