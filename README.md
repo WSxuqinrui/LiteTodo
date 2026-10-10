@@ -6,11 +6,13 @@
 
 当前版本 **0.4.1** · Windows x64 程序约 **2.54 MB** · 无需账户 · 启动不联网
 
-[下载 LiteTodo.exe](https://github.com/WSxuqinrui/LiteTodo/releases/download/v0.4.1/LiteTodo.exe) · [全部版本](https://github.com/WSxuqinrui/LiteTodo/releases) · [构建与数据说明](docs/development.md)
+[下载完整便携包 ZIP](https://github.com/WSxuqinrui/LiteTodo/releases/download/v0.4.1/LiteTodo-0.4.1-windows-x64.zip) · [下载 LiteTodo.exe](https://github.com/WSxuqinrui/LiteTodo/releases/download/v0.4.1/LiteTodo.exe) · [全部版本](https://github.com/WSxuqinrui/LiteTodo/releases) · [构建与数据说明](docs/development.md)
 
 ## 双击即用
 
 在 Releases 下载 **LiteTodo.exe**，放到常用文件夹，双击即可使用，无需安装。任务自动保存在本机；升级时关闭程序并替换 EXE 即可。
+
+也可以下载 **LiteTodo-0.4.1-windows-x64.zip** 完整便携包，解压后双击其中的 `LiteTodo.exe`。ZIP 附带使用说明、许可文件和便携数据模式脚本。
 
 首次使用可从「新增」开始；点击左上角软件图标，在快捷面板和控制台之间切换。右上角可设置置顶、主题、浮球、提醒和备份。
 
