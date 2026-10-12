@@ -5,8 +5,8 @@
 <key>CFBundleIdentifier</key><string>local.litetodo.prototype</string>
 <key>CFBundleName</key><string>轻待办</string>
 <key>CFBundleIconFile</key><string>app.icns</string>
-<key>CFBundleShortVersionString</key><string>0.4.1</string>
-<key>CFBundleVersion</key><string>3</string>
+<key>CFBundleShortVersionString</key><string>@PROJECT_VERSION@</string>
+<key>CFBundleVersion</key><string>@PROJECT_VERSION@</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSMinimumSystemVersion</key><string>11.0</string>

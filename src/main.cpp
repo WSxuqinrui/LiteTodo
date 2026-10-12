@@ -1,6 +1,7 @@
 #include "store.h"
 #include "paths.h"
 #include "ui.h"
+#include "instance.h"
 #include <FL/fl_ask.H>
 #include <fstream>
 #include <iostream>
@@ -36,7 +37,9 @@ int main(int argc,char** argv){
             }else data=default_data_directory();
         }
         auto anchor=std::filesystem::absolute(data);data=resolve_data_directory(anchor);std::filesystem::create_directories(data);
-        Store store(data/"tasks.sqlite3");Ui ui(store,data,smoke,anchor);return ui.run();
+        InstanceLock instance(data);
+        if(!instance.owns()){instance.request_activation();return 0;}
+        Store store(data/"tasks.sqlite3");Ui ui(store,data,smoke,anchor,&instance);return ui.run();
     }catch(const std::exception& e){
         std::cerr<<e.what()<<'\n';fl_alert("%s",e.what());return 1;
     }

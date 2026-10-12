@@ -1,6 +1,7 @@
 #include "widgets.h"
 #include "dates.h"
 #include "raster.h"
+#include "platform.h"
 #include <FL/Fl.H>
 #include <FL/fl_draw.H>
 #include <FL/fl_ask.H>
@@ -184,11 +185,32 @@ int TaskBoard::handle(int event){
     return Fl_Widget::handle(event);
 }
 ChildList::ChildList():Fl_Widget(0,0,10,10){}
-void ChildList::draw(){fl_push_clip(x(),y(),w(),h());fl_color(canvas);fl_rectf(x(),y(),w(),h());if(items.empty())clipped(u8"把任务拆成几件容易完成的小事",x()+12,y(),w()-24,h(),12,muted);
+void ChildList::normalize(){offset=std::clamp(offset,0,std::max(0,static_cast<int>(items.size())*38-h()));}
+void ChildList::resize(int x,int y,int w,int h){Fl_Widget::resize(x,y,w,h);pressed_=-1;normalize();}
+void ChildList::draw(){normalize();fl_push_clip(x(),y(),w(),h());fl_color(canvas);fl_rectf(x(),y(),w(),h());if(items.empty())clipped(u8"把任务拆成几件容易完成的小事",x()+12,y(),w()-24,h(),12,muted);
     for(size_t i=0;i<items.size();++i){int top=y()+static_cast<int>(i)*38-offset;if(top+38<y()||top>y()+h())continue;fl_color(line);fl_line(x()+10,top+37,x()+w()-10,top+37);fl_color(items[i].done?blue:muted);fl_circle(x()+20,top+19,7);if(items[i].done)draw_icon(Icon::Check,x()+12,top+11,16,blue);clipped(items[i].title,x()+38,top+2,w()-80,34,12,items[i].done?muted:ink);draw_icon(Icon::Close,x()+w()-28,top+11,14,muted);}
     fl_pop_clip();}
-int ChildList::handle(int e){if(e==FL_MOUSEWHEEL){offset=std::clamp(offset+Fl::event_dy()*38,0,std::max(0,static_cast<int>(items.size())*38-h()));redraw();return 1;}if(e==FL_PUSH)return Fl::event_button()==FL_LEFT_MOUSE;
-    if(e==FL_RELEASE&&Fl::event_button()==FL_LEFT_MOUSE){int i=(Fl::event_y()-y()+offset)/38;if(Fl::event_inside(this)&&i>=0&&i<static_cast<int>(items.size())&&action)action(static_cast<size_t>(i),Fl::event_x()<x()+35?0:Fl::event_x()>x()+w()-38?2:1);return 1;}return Fl_Widget::handle(e);}
+int ChildList::handle(int e){
+    normalize();
+    auto hit_action=[&]{return Fl::event_x()<x()+35?0:Fl::event_x()>x()+w()-38?2:1;};
+    if(e==FL_MOUSEWHEEL){pressed_=-1;offset+=Fl::event_dy()*38;normalize();redraw();return 1;}
+    if(e==FL_PUSH&&Fl::event_button()==FL_LEFT_MOUSE){
+        pressed_=-1;cancelled_=false;
+        int i=(Fl::event_y()-y()+offset)/38;
+        if(Fl::event_inside(this)&&i>=0&&i<static_cast<int>(items.size())){pressed_=i;pressed_action_=hit_action();press_x_=Fl::event_x();press_y_=Fl::event_y();}
+        return 1;
+    }
+    if(e==FL_DRAG){int dx=Fl::event_x()-press_x_,dy=Fl::event_y()-press_y_;if(dx*dx+dy*dy>=25)cancelled_=true;return pressed_>=0?1:0;}
+    if(e==FL_LEAVE){cancelled_=true;return 1;}
+    if(e==FL_RELEASE&&Fl::event_button()==FL_LEFT_MOUSE){
+        int i=(Fl::event_y()-y()+offset)/38,dx=Fl::event_x()-press_x_,dy=Fl::event_y()-press_y_;
+        bool click=!cancelled_&&dx*dx+dy*dy<25&&pressed_==i&&pressed_action_==hit_action()&&Fl::event_inside(this)&&i>=0&&i<static_cast<int>(items.size());
+        int operation=pressed_action_;pressed_=-1;
+        if(click&&action)action(static_cast<size_t>(i),operation);
+        normalize();return 1;
+    }
+    return Fl_Widget::handle(e);
+}
 Toggle::Toggle():Fl_Button(0,0,48,28){type(FL_TOGGLE_BUTTON);tooltip(u8"点击切换开关");}
 void Toggle::draw(){Raster image(w(),h(),surface);image.round(1,1,w()-2,h()-2,(h()-2)/2.0,value()?blue:line);int size=h()-8;image.disc(value()?w()-size/2.0-4:size/2.0+4,h()/2.0,size/2.0,FL_WHITE);image.draw(x(),y());if(Fl::focus()==this){fl_color(blue);fl_rect(x(),y(),w(),h());}}
 int Toggle::handle(int event){int result=Fl_Button::handle(event);if(event==FL_ENTER||event==FL_LEAVE||event==FL_FOCUS||event==FL_UNFOCUS)redraw();return result;}
@@ -200,6 +222,8 @@ void Ball::show(){
     // 使同尺寸重新显示、浮球开关和屏幕缩放都不会沿用旧 HWND 的缓存。
     if(!shown())shape(&shape_mask);
     Fl_Double_Window::show();
+    // 非模态窗口可能随主窗口隐藏而重建，原生置顶属性也必须每次恢复。
+    platform_topmost(this,true);
 }
 Ball::Mood Ball::mood()const{return urgent_count>0?Mood::Urgent:count>=8?Mood::Tired:count==0?Mood::Happy:working_count>0?Mood::Working:Mood::Relaxed;}
 void Ball::draw(){

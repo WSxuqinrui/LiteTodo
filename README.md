@@ -4,7 +4,7 @@
 
 **把待办放在手边。轻量、离线、免安装的桌面任务管理工具。**
 
-当前版本 **0.4.1** · Windows x64 程序约 **2.54 MB** · 无需账户 · 启动不联网
+源码版本 **0.4.2** · 已发布版本 **0.4.1** · 完整发布目录限 **5 MB** · 无需账户 · 启动不联网
 
 [下载完整便携包 ZIP](https://github.com/WSxuqinrui/LiteTodo/releases/download/v0.4.1/LiteTodo-0.4.1-windows-x64.zip) · [下载 LiteTodo.exe](https://github.com/WSxuqinrui/LiteTodo/releases/download/v0.4.1/LiteTodo.exe) · [全部版本](https://github.com/WSxuqinrui/LiteTodo/releases) · [构建与数据说明](docs/development.md)
 
@@ -16,7 +16,7 @@
 
 首次使用可从「新增」开始；点击左上角软件图标，在快捷面板和控制台之间切换。右上角可设置置顶、主题、浮球、提醒和备份。
 
-目前提供 Windows x64 可执行文件。Linux、macOS Intel 和 Apple Silicon 已通过自动构建、测试与打包，桌面实机体验仍待验收。
+目前提供 Windows x64 可执行文件。既有版本的 Linux、macOS Intel 和 Apple Silicon 已通过自动构建、测试与打包；0.4.2 的跨平台构建与桌面实机体验待核验。更新内容见[版本记录](CHANGELOG.md)。
 
 ## 已实现的功能
 
@@ -64,6 +64,8 @@
 Windows 默认数据目录是 `%LOCALAPPDATA%\LiteTodoPrototype`。保留这个历史目录名是为了兼容早期版本，更新程序不会要求重新录入任务。可以在设置中更改数据目录，或使用 `--portable` 将数据存放到程序旁的 `data` 文件夹。
 
 数据库备份包含任务与附件引用，换机时还需复制附件文件。建议升级前在「设置 → 数据与备份」执行一次备份。详细路径、迁移和恢复规则见[数据说明](docs/development.md#数据备份与升级)。
+
+0.4.2 按数据目录限制重复启动，并在保存草稿前检查任务是否已被其他连接修改。旧数据库升级到 v6 前自动保存快照；升级前请完全退出旧版程序，退回旧版需使用升级前快照。
 
 ## 当前边界
 

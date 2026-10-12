@@ -32,7 +32,12 @@ std::filesystem::path daily_backup(Store& store,const std::filesystem::path& dir
     std::filesystem::create_directories(directory);auto destination=directory/("auto-"+date_text(now_seconds())+".sqlite3");if(!std::filesystem::exists(destination))store.backup(destination);
     // 只修剪本软件生成的精确命名文件，手工备份、导入前快照及其他文件保留。
     std::vector<std::filesystem::path> files;for(const auto& item:std::filesystem::directory_iterator(directory)){auto name=item.path().filename().u8string();if(item.is_regular_file()&&name.size()==23&&name.rfind("auto-",0)==0&&name.substr(15)==".sqlite3"){try{parse_date(name.substr(5,10));files.push_back(item.path());}catch(...){}}}
-    std::sort(files.begin(),files.end());while(files.size()>7){std::filesystem::remove(files.front());files.erase(files.begin());}return destination;
+    std::sort(files.begin(),files.end());while(files.size()>7){
+        // 时钟回拨时，日期最小的可能是刚创建的当天快照，必须明确保留。
+        auto oldest=std::find_if(files.begin(),files.end(),[&](const auto& file){return file!=destination;});
+        if(oldest==files.end())break;
+        std::filesystem::remove(*oldest);files.erase(oldest);
+    }return destination;
 }
 std::vector<Attachment> copy_attachments(const std::vector<Attachment>& existing,const std::vector<std::filesystem::path>& incoming,const std::filesystem::path& folder,std::vector<std::filesystem::path>& created){
     if(existing.size()+incoming.size()>40)throw std::runtime_error(u8"每项任务最多 40 个附件");

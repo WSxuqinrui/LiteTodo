@@ -71,6 +71,9 @@ def main():
                 if contract not in result:
                     raise RuntimeError(f"Missing regression result: {contract}")
             resource["clean_exit"] = True
+            native_state = (data / "native-window-state.txt").read_text(encoding="utf-8")
+            if "alpha 204" not in native_state or "Ball topmost after hide/show and scale: PASS" not in native_state:
+                raise RuntimeError("Missing native opacity/topmost checks")
             (data / "resources.json").write_text(json.dumps(resource, ensure_ascii=False, indent=2), encoding="utf-8")
             # 这里只将应用自身的真实控件渲染捕获转存 PNG，不改变像素内容。
             from PIL import Image
@@ -78,6 +81,7 @@ def main():
                 Image.open(capture).save(ROOT / "verification" / (capture.stem + ".png"))
             (ROOT / "verification/latest-run.txt").write_text(str(data), encoding="utf-8")
             print(result)
+            print(native_state)
             print(json.dumps(resource, ensure_ascii=False, indent=2))
         finally:
             if process.poll() is None:

@@ -86,11 +86,15 @@ public:
     int handle(int event)override;
 };
 class ChildList:public Fl_Widget {
+    int pressed_=-1,pressed_action_=-1,press_x_=0,press_y_=0;
+    bool cancelled_=false;
 public:
     std::vector<Subtask> items;
     std::function<void(size_t,int)> action;
     int offset=0;
     ChildList();
+    void normalize();
+    void resize(int x,int y,int w,int h)override;
     void draw()override;
     int handle(int event)override;
 };

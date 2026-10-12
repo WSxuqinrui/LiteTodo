@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import zipfile
 import tempfile
@@ -10,6 +11,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LIMIT = 5_000_000
+
+def project_version():
+    """以构建版本为唯一来源，避免新版程序误装入旧版文件名。"""
+    source = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    match = re.search(r"project\(LiteTodo\s+VERSION\s+(\d+\.\d+\.\d+)\b", source)
+    if not match:
+        raise RuntimeError("Cannot read LiteTodo project version")
+    return match.group(1)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -34,7 +43,11 @@ def build_release(args, destination, release, dist):
         shutil.copytree(args.binary, target, dirs_exist_ok=True)
     else:
         shutil.copy2(args.binary, target)
-    shutil.copy2(ROOT / "README.md", destination / "使用说明.md")
+    # 本地说明链接对齐随包文件名；GitHub 上的 README 仍保留源码路径。
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme = readme.replace("](THIRD_PARTY_NOTICES.md)", "](第三方声明.md)").replace("](docs/licenses/)", "](licenses/)")
+    (destination / "使用说明.md").write_text(readme, encoding="utf-8")
+    shutil.copy2(ROOT / "CHANGELOG.md", destination / "CHANGELOG.md")
     shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", destination / "第三方声明.md")
     docs = destination / "docs"
     docs.mkdir(exist_ok=True)
@@ -42,6 +55,9 @@ def build_release(args, destination, release, dist):
     shutil.copy2(ROOT / "docs/revision-design.md", docs / "revision-design.md")
     if (ROOT / "docs/development.md").is_file():
         shutil.copy2(ROOT / "docs/development.md", docs / "development.md")
+    validation = ROOT / f"docs/validation-{project_version()}.md"
+    if validation.is_file():
+        shutil.copy2(validation, docs / validation.name)
     # 使用说明的本地图片一起发布，免安装包离线查看也不会出现失效引用。
     for relative in ("assets/app.png", "docs/screenshots/main.png", "docs/screenshots/editor.png", "docs/screenshots/console.png"):
         source = ROOT / relative
@@ -61,14 +77,15 @@ def build_release(args, destination, release, dist):
     files = sorted(path for path in destination.rglob("*") if path.is_file() and path.name != "SIZE.json")
     records = [{"file": p.relative_to(destination).as_posix(), "bytes": p.stat().st_size,
                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in files]
-    report = {"platform": args.platform, "limit_bytes": LIMIT, "payload_bytes": sum(x["bytes"] for x in records),
+    version = project_version()
+    report = {"version": version, "platform": args.platform, "limit_bytes": LIMIT, "payload_bytes": sum(x["bytes"] for x in records),
               "files": records, "runtime_dependencies": "Must additionally inspect imports; file size alone does not prove portable deployment"}
     size_file = destination / "SIZE.json"
     size_file.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     total = sum(p.stat().st_size for p in destination.rglob("*") if p.is_file())
     if total > LIMIT:
         raise RuntimeError(f"Package exceeds budget: {total:,} > {LIMIT:,} bytes")
-    archive = dist / f"LiteTodo-0.4.1-{args.platform}.zip"
+    archive = dist / f"LiteTodo-{version}-{args.platform}.zip"
     temporary_archive = destination.parent / archive.name
     with zipfile.ZipFile(temporary_archive, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as package:
         for file in sorted(destination.rglob("*")):

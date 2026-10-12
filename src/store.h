@@ -17,6 +17,8 @@ struct Task {
     std::string source,category;
     int child_count=0,child_done=0,attachment_count=0;
     bool shelved=false;
+    // 随任务/子任务/附件修改更新，阻止旧草稿及复用编号覆盖现有数据。
+    std::string edit_token;
 };
 struct Subtask {long long id=0;std::string title;bool done=false;};
 struct Attachment {std::string name,path;};
@@ -32,14 +34,16 @@ public:
     void add_many(const std::vector<Task>& tasks);
     long long add(const std::string& title,const std::string& note,long long remind_at);
     std::vector<Task> list(const std::string& query="",int filter=0);
+    Task get(long long id);
     void set_done(long long id,bool done);
     void set_progress(long long id,bool active);
     void set_urgent(long long id,bool urgent);
     // 搁置暂停提醒；开始或完成任务时自动结束搁置。
     void set_shelved(long long id,bool shelved);
     void update(long long id,const std::string& title,const std::string& note,long long remind_at);
-    void remove(long long id);
-    void reschedule(long long id,long long remind_at);
+    // 确认页/旧草稿可提供修改令牌，原子拒绝删除或改期已变化的任务。
+    void remove(long long id,const std::string& expected_token="");
+    Task reschedule(long long id,long long remind_at,const std::string& expected_token="");
     std::vector<Task> due(long long at,const std::vector<long long>& excluded={});
     long long next_due(const std::vector<long long>& excluded={});
     void mark_notified(long long id);

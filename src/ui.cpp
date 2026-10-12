@@ -5,6 +5,7 @@
 #include "settings.h"
 #include "workspace.h"
 #include "paths.h"
+#include "instance.h"
 #include <FL/Fl.H>
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Scroll.H>
@@ -39,6 +40,7 @@ const char* setting_defaults[]={"0","0","1","1","1","1","0","0"};
 // 所有业务页面都是同一主窗口中的 Group，只有桌面浮球是独立窗口。
 struct Ui::Impl {
     Store& store;std::filesystem::path data,anchor;
+    InstanceLock* instance=nullptr;
     SettingsPanel* settings_panel=nullptr;
     KeyNote* organize_input=nullptr;TaskBoard* organize_preview=nullptr;Fl_Button *organize_back=nullptr,*organize_analyze=nullptr,*organize_save=nullptr,*organize_paste=nullptr;Fl_Box* organize_heading=nullptr;
     Fl_Box* attachment_label=nullptr;ChildList* attachment_list=nullptr;KeyInput* attachment_input=nullptr;Fl_Button* attachment_add=nullptr;std::vector<Attachment> draft_files;std::vector<std::filesystem::path> pending_files;
@@ -72,7 +74,7 @@ struct Ui::Impl {
     Toggle* toggles[8]{};Fl_Button* startup_mode[2]{};Fl_Box* startup_label=nullptr;KeyInput* backup_path=nullptr;
     Fl_Box* confirm_text=nullptr;Fl_Button *confirm_cancel=nullptr,*confirm_accept=nullptr;std::function<void()> confirmed_action;
 
-    Impl(Store& s,const std::filesystem::path& d,bool check,const std::filesystem::path& origin):store(s),data(d),anchor(origin.empty()?d:origin),smoke(check){
+    Impl(Store& s,const std::filesystem::path& d,bool check,const std::filesystem::path& origin,InstanceLock* lock=nullptr):store(s),data(d),anchor(origin.empty()?d:origin),instance(lock),smoke(check){
         Fl::lock();fonts();palette(number("theme",0),number("accent",0),platform_system_dark());pinned=store.setting("pinned","0")=="1";console=store.setting("startup_mode","quick")=="console";board_view=store.setting("board_view","1")=="1";
         window=std::make_unique<AppWindow>(console?1120:500,780);window->begin();
         logo=new IconButton(10,9,36,36,Icon::Logo,u8"切换快捷面板 / 控制台");logo->callback([](Fl_Widget*,void* p){static_cast<Impl*>(p)->guard([&]{static_cast<Impl*>(p)->toggle_mode();});},this);
@@ -83,9 +85,10 @@ struct Ui::Impl {
         window->before_pointer=[this](int x,int y){if(list->menu_id&&(x<list->x()||x>=list->x()+list->w()||y<list->y()||y>=list->y()+list->h())){list->menu_id=0;list->redraw();}};
         window->layout=[this]{layout();};window->shortcut=[this](int key,int state){return shortcut(key,state);};window->callback([](Fl_Widget*,void* p){static_cast<Impl*>(p)->close_main();},this);
         platform_window_icon(window.get());platform_init({[this]{show();},[this]{show();open_editor();},[this]{show();request_exit();},[this]{guard([&]{open_organize(true);});}});
-        make_ball();refresh();visibility();layout();Fl::add_timeout(0.2,tick,this);
+        make_ball();refresh();visibility();layout();Fl::add_timeout(0.2,tick,this);if(instance)Fl::add_timeout(0.4,activation_tick,this);
     }
-    ~Impl(){Fl::remove_timeout(tick,this);Fl::remove_timeout(smoke_tick,this);Fl::remove_timeout(smoke_finish,this);platform_shutdown();}
+    ~Impl(){Fl::remove_timeout(tick,this);Fl::remove_timeout(activation_tick,this);Fl::remove_timeout(smoke_tick,this);Fl::remove_timeout(smoke_finish,this);platform_shutdown();}
+    static void activation_tick(void* p){auto* a=static_cast<Impl*>(p);a->guard([&]{if(a->instance&&a->instance->consume_activation())a->show();});Fl::repeat_timeout(0.4,activation_tick,a);}
     template<class Action> void guard(Action action){try{action();}catch(const std::exception& e){message(e.what());}}
     void message(const char* text){status->copy_label(text);status->redraw();}
     bool flag(int i){return store.setting(setting_keys[i],setting_defaults[i])=="1";}
@@ -134,7 +137,7 @@ struct Ui::Impl {
         add_child=button(0,0,1,1,u8"添加");add_child->callback([](Fl_Widget*,void* p){auto* a=static_cast<Impl*>(p);a->guard([&]{a->save_child();});},this);
         attachment_label=label(u8"附件 · 完整路径或拖入文件",12,muted);attachment_list=new ChildList;attachment_list->action=[this](size_t index,int action){guard([&]{if(action==2){if(index<draft_files.size())draft_files.erase(draft_files.begin()+index);else pending_files.erase(pending_files.begin()+index-draft_files.size());update_files();}else if(index<draft_files.size())message(draft_files[index].path.c_str());else message(pending_files.at(index-draft_files.size()).u8string().c_str());});};
         attachment_input=new KeyInput(0,0,1,1,u8"输入文件的完整路径");input(attachment_input);attachment_add=button(0,0,1,1,u8"添加");attachment_add->callback([](Fl_Widget*,void* p){auto* a=static_cast<Impl*>(p);a->guard([&]{auto path=std::filesystem::u8path(a->attachment_input->value());if(!path.is_absolute()||!std::filesystem::is_regular_file(path))throw std::runtime_error(u8"请输入已有文件的完整路径");a->pending_files.push_back(path);a->attachment_input->value("");a->update_files();});},this);
-        delete_button=button(0,0,1,1,u8"删除此任务");delete_button->labelcolor(red);delete_button->callback([](Fl_Widget*,void* p){auto* a=static_cast<Impl*>(p);a->confirm(u8"删除此任务及全部子任务？",u8"删除",[a]{a->store.remove(a->draft.id);a->cancel_edit();a->message(u8"任务已删除");});},this);edit_scroll->end();pages[1]->end();
+        delete_button=button(0,0,1,1,u8"删除此任务");delete_button->labelcolor(red);delete_button->callback([](Fl_Widget*,void* p){auto* a=static_cast<Impl*>(p);a->confirm(u8"删除此任务及全部子任务？",u8"删除",[a,id=a->draft.id,token=a->draft.edit_token]{a->store.remove(id,token);a->cancel_edit();a->message(u8"任务已删除");});},this);edit_scroll->end();pages[1]->end();
     }
     void make_calendar(){
         pages[2]=group();calendar_back=button(0,0,1,1,u8"← 返回");calendar_back->callback(back_callback,this);calendar_heading=label("",21);
@@ -206,12 +209,12 @@ struct Ui::Impl {
     void save_child(){auto text=trim(child_input->value());if(text.empty())throw std::runtime_error(u8"请输入子任务内容");if(child_edit>=0&&child_edit<static_cast<int>(child_list->items.size()))child_list->items[child_edit].title=text;else{if(child_list->items.size()>=200)throw std::runtime_error(u8"每项任务最多 200 条子任务");child_list->items.push_back({0,text,false});if(draft.done){draft.done=false;draft.in_progress=false;}}
         child_edit=-1;child_input->value("");add_child->copy_label(u8"添加");child_list->offset=std::max(0,static_cast<int>(child_list->items.size())*38-child_list->h());update_draft_labels();}
     void update_draft_labels(){const int days[]={0,1,2,3,7};for(int i=0;i<5;++i){due_chips[i]->color(draft.due_at==day_after(days[i])?pale:canvas);due_chips[i]->labelcolor(draft.due_at==day_after(days[i])?blue:ink);due_chips[i]->redraw();}
-        auto text=draft.due_at?u8"交付："+date_text(draft.due_at):std::string(u8"未设交付日期");due_info->copy_label(text.c_str());text=draft.remind_at?u8"提醒："+date_text(draft.remind_at,true):std::string(u8"未设提醒");reminder_info->copy_label(text.c_str());int done=0;for(const auto& child:child_list->items)done+=child.done;text=std::to_string(done)+" / "+std::to_string(child_list->items.size())+u8" 完成 · 点击名称编辑";child_info->copy_label(text.c_str());child_list->redraw();window->redraw();}
+        auto text=draft.due_at?u8"交付："+date_text(draft.due_at):std::string(u8"未设交付日期");due_info->copy_label(text.c_str());text=draft.remind_at?u8"提醒："+date_text(draft.remind_at,true):std::string(u8"未设提醒");reminder_info->copy_label(text.c_str());int done=0;for(const auto& child:child_list->items)done+=child.done;text=std::to_string(done)+" / "+std::to_string(child_list->items.size())+u8" 完成 · 点击名称编辑";child_info->copy_label(text.c_str());child_list->normalize();child_list->redraw();window->redraw();}
     void fill_calendar(){auto t=local_parts(calendar_time(calendar_year,calendar_month,1));int start=(t.tm_wday+6)%7;int n[]={31,28,31,30,31,30,31,31,30,31,30,31};if(calendar_year%4==0&&(calendar_year%100!=0||calendar_year%400==0))n[1]=29;auto text=std::to_string(calendar_year)+u8" 年 "+std::to_string(calendar_month)+u8" 月";calendar_heading->copy_label(text.c_str());for(int i=0;i<42;++i){int day=i-start+1;cell_dates[i]=0;if(day>=1&&day<=n[calendar_month-1]){cell_dates[i]=calendar_time(calendar_year,calendar_month,day);cells[i]->copy_label(std::to_string(day).c_str());cells[i]->activate();cells[i]->show();}else{cells[i]->copy_label("");cells[i]->deactivate();cells[i]->hide();}cells[i]->color(cell_dates[i]&&cell_dates[i]==draft.due_at?pale:canvas);cells[i]->redraw();}}
     void task_action(const Task& task,TaskAction action){if(action==TaskAction::Edit){open_editor(&task);return;}if(draft_active){navigate(Page::Edit);message(u8"请先保存或取消当前草稿");return;}
-        if(action==TaskAction::Delete){auto text=u8"删除「"+task.title+u8"」及其全部子任务？";confirm(text.c_str(),u8"删除",[this,id=task.id]{store.remove(id);history.clear();navigate(Page::Home,false);refresh();reschedule_tick();message(u8"任务已删除");});return;}if(action==TaskAction::Shelve)store.set_shelved(task.id,!task.shelved);
+        if(action==TaskAction::Delete){auto text=u8"删除「"+task.title+u8"」及其全部子任务？";confirm(text.c_str(),u8"删除",[this,id=task.id,token=task.edit_token]{store.remove(id,token);history.clear();navigate(Page::Home,false);refresh();reschedule_tick();message(u8"任务已删除");});return;}if(action==TaskAction::Shelve)store.set_shelved(task.id,!task.shelved);
         if(action==TaskAction::Defer){open_editor(&task);date_picker->do_callback();return;}if(action==TaskAction::Urgent)store.set_urgent(task.id,!task.urgent);if(action==TaskAction::Start)store.set_progress(task.id,!task.in_progress);if(action==TaskAction::Complete)store.set_done(task.id,!task.done);refresh();message(u8"任务状态已更新");reschedule_tick();}
-    void update_files(){attachment_list->items.clear();for(const auto& file:draft_files)attachment_list->items.push_back({0,file.name,false});for(const auto& file:pending_files)attachment_list->items.push_back({0,file.filename().u8string()+u8" · 待保存",false});attachment_list->redraw();}
+    void update_files(){attachment_list->items.clear();for(const auto& file:draft_files)attachment_list->items.push_back({0,file.name,false});for(const auto& file:pending_files)attachment_list->items.push_back({0,file.filename().u8string()+u8" · 待保存",false});attachment_list->normalize();attachment_list->redraw();}
     void toggle_pin(){bool enabled=!pinned;if(enabled&&store.setting("desktop","0")=="1"){if(!platform_desktop(window.get(),false))throw std::runtime_error(u8"桌面模式未能退出");store.set_setting("desktop","0");settings_panel->reload();}if(!platform_topmost(window.get(),enabled))throw std::runtime_error(u8"当前桌面暂不支持置顶");pinned=enabled;store.set_setting("pinned",pinned?"1":"0");pin->selected(pinned);pin->copy_label(pinned?u8"已置顶":u8"置顶");message(pinned?u8"已置顶 · 再次点击取消":u8"已取消置顶");}
     void apply_setting(const std::string& key){
         if(key=="theme"||key=="accent"){palette(number("theme",0),number("accent",0),platform_system_dark());window->redraw();ball->redraw();}
@@ -231,7 +234,21 @@ struct Ui::Impl {
         if(command=="import"){auto target=full_path(settings_panel->field("backup_path"));confirm(u8"导入将替换当前任务与设置，并放弃未保存草稿。会先备份当前数据。",u8"备份并导入",[this,target]{store.restore_from(target);draft_active=false;draft_files.clear();pending_files.clear();pending_notifications.clear();retry_after.clear();alerts.clear();alert_indicator->hide();deliveries=std::make_shared<DeliveryQueue>();settings_panel->reload();settings_panel->paths(data);apply_setting("theme");platform_opacity(window.get(),number("opacity",100));if(!platform_hotkey(store.setting("hotkey_enabled","0")=="1",number("hotkey_mod",3),number("hotkey_key",78))){platform_hotkey(false,0,0);store.set_setting("hotkey_enabled","0");}store.set_setting("desktop","0");pinned=store.setting("pinned","0")=="1";if(!platform_topmost(window.get(),pinned))pinned=false;pin->selected(pinned);pin->copy_label(pinned?u8"已置顶":u8"置顶");apply_ball();settings_panel->reload();history.clear();navigate(Page::Home,false);refresh();message(u8"导入完成，原数据已留存备份");});return;}
         if(command=="open_data"||command=="open_attachments"){auto folder=command=="open_data"?data:std::filesystem::u8path(store.setting("attachment_dir",(data/"attachments").u8string()));std::filesystem::create_directories(folder);if(!platform_open_folder(folder))throw std::runtime_error(u8"系统未能打开文件夹");return;}
         if(command=="move_attachments"){auto target=full_path(settings_panel->field("attachment_path"));std::filesystem::create_directories(target);auto probe=target/(".write-check-"+std::to_string(now_seconds()));{std::ofstream out(probe);if(!out)throw std::runtime_error(u8"新目录不可写");}std::filesystem::remove(probe);store.set_setting("attachment_dir",target.u8string());settings_panel->paths(data);message(u8"新附件将保存到此目录，已有附件保留原位置");return;}
-        if(command=="move_data"){auto target=full_path(settings_panel->field("data_path"));if(target==data)throw std::runtime_error(u8"请选择不同的新目录");if(std::filesystem::exists(target/".litetodo-location"))throw std::runtime_error(u8"新目录已有位置设置，请选择空目录");confirm(u8"复制数据库到新目录并记住位置。原目录和已有附件保留。",u8"复制并切换",[this,target]{store.set_setting("attachment_dir",store.setting("attachment_dir",(data/"attachments").u8string()));std::filesystem::create_directories(target);store.relocate(target/"tasks.sqlite3",[this,target]{remember_data_directory(anchor,target);});data=target;settings_panel->paths(data);back();message(u8"数据目录已切换，原目录仍保留");if(platform_autostart_enabled()&&!platform_set_autostart(true,data.u8string()))message(u8"目录已切换，请重新设置自动启动");});return;}
+        if(command=="move_data"){
+            auto target=full_path(settings_panel->field("data_path"));
+            if(target==data)throw std::runtime_error(u8"请选择不同的新目录");
+            if(std::filesystem::exists(target/".litetodo-location"))throw std::runtime_error(u8"新目录已有位置设置，请选择空目录");
+            confirm(u8"复制数据库到新目录并记住位置。原目录和已有附件保留。",u8"复制并切换",[this,target]{
+                std::unique_ptr<InstanceLock> next;
+                if(instance){next=std::make_unique<InstanceLock>(target);if(!next->owns())throw std::runtime_error(u8"新目录正在被另一实例使用，请先退出该实例");}
+                store.set_setting("attachment_dir",store.setting("attachment_dir",(data/"attachments").u8string()));
+                std::filesystem::create_directories(target);
+                store.relocate(target/"tasks.sqlite3",[this,target]{remember_data_directory(anchor,target);});
+                if(next)instance->swap(*next);
+                data=target;settings_panel->paths(data);back();message(u8"数据目录已切换，原目录仍保留");
+                if(platform_autostart_enabled()&&!platform_set_autostart(true,data.u8string()))message(u8"目录已切换，请重新设置自动启动");
+            });return;
+        }
         if(command=="ball_reset"){ball->reset_position();message(u8"浮球已放回右上方");return;}
     }
     bool shortcut(int key,int state){if(settings_panel->recording()){guard([&]{settings_panel->capture(key,state);});return true;}if((state&FL_CTRL)&&(key=='n'||key=='N')){guard([&]{open_editor();});return true;}if((state&FL_CTRL)&&(key=='f'||key=='F')){navigate(Page::Home);search->take_focus();return true;}if((state&FL_CTRL)&&(key==FL_Enter||key==FL_KP_Enter)&&page==Page::Edit){guard([&]{save_edit();});return true;}
@@ -239,8 +256,8 @@ struct Ui::Impl {
     void confirm(const char* text,const char* accept,std::function<void()> action){confirmed_action=std::move(action);confirm_text->copy_label(text);confirm_accept->copy_label(accept);navigate(Page::Confirm);}
     void request_exit(){if(draft_active)confirm(u8"还有未保存的草稿。放弃草稿并退出？",u8"放弃并退出",[this]{quit=true;});else quit=true;}
     void close_main(){if(flag(2)&&(platform_tray_available()||(ball&&ball->shown())))window->hide();else request_exit();}
-    void show(){window->show();if(pinned)platform_topmost(window.get(),true);}
-    void make_ball(){ball=std::make_unique<Ball>();int bx=1100,by=700;std::ifstream saved(data/"ball-position.txt");saved>>bx>>by;int sx,sy,sw,sh;Fl::screen_work_area(sx,sy,sw,sh,bx,by);ball->position(std::clamp(bx,sx,sx+std::max(0,sw-ball->w())),std::clamp(by,sy,sy+std::max(0,sh-ball->h())));ball->click=[this]{if(ball->double_click&&window->shown())window->hide();else{show();navigate(Page::Home);guard([&]{refresh();});}if(ball->chat)message(u8"先完成一件小事，今天也在前进。");};ball->hover_open=[this]{if(!window->shown()){show();navigate(alerts.empty()?Page::Home:Page::Alert);if(!alerts.empty())update_alert();}};ball->dropped=[this](const std::string& text){guard([&]{auto files=drop_files(text);if(files.empty())throw std::runtime_error(u8"请拖入本机文件");open_editor();pending_files.insert(pending_files.end(),files.begin(),files.end());if(!title->value()[0])title->value(files[0].stem().u8string().c_str());update_files();});};ball->right_click=[this]{guard([&]{open_editor();});};ball->position_saved=[this]{guard([&]{std::ofstream save(data/"ball-position.txt");save<<ball->x()<<' '<<ball->y();if(!save)throw std::runtime_error(u8"浮球位置未能保存");});};}
+    void show(){window->show();if(pinned)platform_topmost(window.get(),true);platform_opacity(window.get(),number("opacity",100));}
+    void make_ball(){ball=std::make_unique<Ball>();int bx=1100,by=700;std::ifstream saved(data/"ball-position.txt");saved>>bx>>by;int sx,sy,sw,sh;Fl::screen_work_area(sx,sy,sw,sh,bx,by);ball->position(std::clamp(bx,sx,sx+std::max(0,sw-ball->w())),std::clamp(by,sy,sy+std::max(0,sh-ball->h())));ball->click=[this]{if(ball->double_click&&window->shown())window->hide();else{show();guard([&]{refresh();});}if(ball->chat)message(u8"先完成一件小事，今天也在前进。");};ball->hover_open=[this]{if(!window->shown()){show();if(page==Page::Alert&&!alerts.empty())update_alert();}};ball->dropped=[this](const std::string& text){guard([&]{auto files=drop_files(text);if(files.empty())throw std::runtime_error(u8"请拖入本机文件");if(draft_active){navigate(Page::Edit);message(u8"请先保存或取消当前草稿");return;}open_editor();pending_files.insert(pending_files.end(),files.begin(),files.end());if(!title->value()[0])title->value(files[0].stem().u8string().c_str());update_files();});};ball->right_click=[this]{guard([&]{open_editor();});};ball->position_saved=[this]{guard([&]{std::ofstream save(data/"ball-position.txt");save<<ball->x()<<' '<<ball->y();if(!save)throw std::runtime_error(u8"浮球位置未能保存");});};}
     void apply_ball(){ball->style=number("ball_style",1);ball->accent=number("ball_accent",0);ball->wire=store.setting("ball_wire","0")=="1";ball->edge=store.setting("ball_edge","0")=="1";ball->hover_expand=store.setting("ball_hover","0")=="1";ball->double_click=store.setting("ball_double","0")=="1";ball->chat=store.setting("ball_chat","0")=="1";ball->accept_drop=store.setting("ball_drop","1")=="1";ball->configure();if(flag(4)){ball->show();platform_topmost(ball.get(),true);}else{ball->hide();if(!window->shown()&&!platform_tray_available())show();}}
     void reschedule_tick(){Fl::remove_timeout(tick,this);Fl::add_timeout(0.2,tick,this);}
     void send_notification(long long id,long long at,const std::string& text){pending_notifications.insert(id);std::weak_ptr<DeliveryQueue> weak=deliveries;bool submitted=platform_notify(id?u8"任务提醒":u8"轻待办 · 测试通知",text,[weak,id,at](bool accepted){if(auto q=weak.lock()){{std::lock_guard<std::mutex> lock(q->mutex);q->results.push_back({id,at,accepted});}Fl::awake();}});message(submitted?u8"等待系统显示通知，最多 10 秒后反馈结果":platform_notification_feedback());if(!submitted){pending_notifications.erase(id);present_alert({id,at,false});}}
@@ -254,7 +271,18 @@ struct Ui::Impl {
     void prune_alerts(const std::vector<Task>& all){for(auto it=alerts.begin();it!=alerts.end();){if(it->first&&std::none_of(all.begin(),all.end(),[&](const Task& t){return t.id==it->first&&!t.done&&!t.shelved&&t.remind_at==it->second;}))it=alerts.erase(it);else ++it;}if(alerts.empty()){alert_indicator->hide();if(page==Page::Alert)back();}else{alert_indicator->show();if(page==Page::Alert)update_alert();}}
     void update_alert(){if(alerts.empty()){if(page==Page::Alert)back();return;}alert_id=alerts.begin()->first;std::string text=u8"这是一条测试提醒。";if(alert_id)for(const auto& t:store.list())if(t.id==alert_id)text=t.title;alert_heading->copy_label((u8"待处理提醒 · "+std::to_string(alerts.size())+u8" 条").c_str());alert_text->copy_label(text.c_str());alert_info->copy_label((alert_reason+u8"。\n已改用应用内提醒，点「知道了」后才标记为已提醒。").c_str());if(alert_id){alert_view->activate();alert_snooze->activate();}else{alert_view->deactivate();alert_snooze->deactivate();}alert_indicator->show();window->redraw();}
     void present_alert(const Delivery& event){if(event.id){auto all=store.list();if(std::none_of(all.begin(),all.end(),[&](const Task& t){return t.id==event.id&&!t.done&&!t.shelved&&t.remind_at==event.at;}))return;}alerts[event.id]=event.at;retry_after.erase(event.id);alert_reason=platform_notification_feedback();update_alert();show();if(!draft_active&&page!=Page::Confirm)navigate(Page::Alert);else message(u8"有未处理提醒 · 点击顶部蓝色提醒按钮查看");}
-    void dismiss_alert(bool snooze){auto found=alerts.find(alert_id);if(found==alerts.end())return;if(alert_id){if(snooze){auto at=now_seconds()+300;store.reschedule(alert_id,at);if(draft_active&&draft.id==alert_id){draft.remind_at=at;update_draft_labels();}}else store.confirm_notification(alert_id,found->second);}alerts.erase(found);if(alerts.empty()){alert_indicator->hide();if(page==Page::Alert)back();}else update_alert();reschedule_tick();message(snooze?u8"将在 5 分钟后再次提醒":u8"已确认看到提醒");}
+    void dismiss_alert(bool snooze){
+        auto found=alerts.find(alert_id);if(found==alerts.end())return;
+        if(alert_id){if(snooze){
+            auto current=store.get(alert_id);
+            if(current.remind_at!=found->second||current.done||current.shelved)throw std::runtime_error(u8"此提醒已变化，请刷新任务后再操作");
+            bool matching_draft=draft_active&&draft.id==alert_id&&draft.edit_token==current.edit_token;
+            auto updated=store.reschedule(alert_id,now_seconds()+300,current.edit_token);
+            // 只同步本次操作产生的新令牌；此前已失效的草稿继续保持冲突状态。
+            if(matching_draft){draft.remind_at=updated.remind_at;draft.edit_token=updated.edit_token;update_draft_labels();}
+        }else store.confirm_notification(alert_id,found->second);}
+        alerts.erase(found);if(alerts.empty()){alert_indicator->hide();if(page==Page::Alert)back();}else update_alert();reschedule_tick();message(snooze?u8"将在 5 分钟后再次提醒":u8"已确认看到提醒");
+    }
     void process_deliveries(){std::vector<Delivery> results;{std::lock_guard<std::mutex> lock(deliveries->mutex);results.swap(deliveries->results);}for(const auto& event:results){pending_notifications.erase(event.id);guard([&]{if(event.accepted){if(event.id)store.confirm_notification(event.id,event.at);retry_after.erase(event.id);message(platform_notification_confirmation());}else present_alert(event);});if(smoke)std::ofstream(data/"notification-result.txt",std::ios::app)<<event.id<<" "<<(event.accepted?platform_notification_confirmation():platform_notification_feedback())<<"\n";}if(!results.empty())reschedule_tick();}
     static void tick(void* p){auto* a=static_cast<Impl*>(p);platform_poll();if(!a->window->shown()&&!platform_tray_available()&&!a->ball->shown())a->show();long long next=0;
         a->guard([&]{if(a->flag(5)){std::vector<long long> excluded(a->pending_notifications.begin(),a->pending_notifications.end());for(const auto& alert:a->alerts)excluded.push_back(alert.first);for(const auto& task:a->store.due(now_seconds(),excluded)){a->send_notification(task.id,task.remind_at,task.title);excluded.push_back(task.id);}next=a->store.next_due(excluded);}
@@ -273,12 +301,18 @@ struct Ui::Impl {
         const int shaped=GetWindowRgn(handle,region);const int width=client.right,height=client.bottom;
         const bool round=width>0&&height>0&&shaped!=ERROR&&!PtInRegion(region,0,0)&&!PtInRegion(region,width-1,0)&&!PtInRegion(region,0,height-1)&&!PtInRegion(region,width-1,height-1)&&PtInRegion(region,width/2,height/2);
         DeleteObject(region);if(!round)throw std::runtime_error(cause);
+        if(!(GetWindowLongPtrW(handle,GWL_EXSTYLE)&WS_EX_TOPMOST))throw std::runtime_error("Floating window lost native topmost state");
     }
     void check_ball_lifecycle(){
         check_ball_region("Ball native window still has rectangular corners");
+        auto previous=store.setting("opacity","100");store.set_setting("opacity","80");apply_setting("opacity");
+        window->hide();show();Fl::check();BYTE alpha=0;DWORD flags=0;COLORREF color=0;
+        if(!GetLayeredWindowAttributes(fl_win32_xid(window.get()),&color,&alpha,&flags)||alpha!=204)throw std::runtime_error("Main window lost configured opacity after reopening");
+        store.set_setting("opacity",previous);apply_setting("opacity");
         for(int i=0;i<3;++i){ball->hide();ball->show();check_ball_region("Reopening ball loses native round region");window->hide();show();check_ball_region("Main window hide/show loses ball round region");}
         const int bx=ball->x(),by=ball->y();ball->position(bx+16,by+16);ball->wire=!ball->wire;ball->redraw();check_ball_region("Ball move/repaint loses round region");ball->wire=!ball->wire;ball->position(bx,by);ball->redraw();
         const int screen=ball->screen_num();const float scale=Fl::screen_scale(screen);Fl::screen_scale(screen,scale*1.5f);check_ball_region("Ball 150 percent scale loses round region");Fl::screen_scale(screen,scale);check_ball_region("Ball scale restore loses round region");
+        std::ofstream(data/"native-window-state.txt")<<"Main opacity after HWND recreation: PASS (80 percent, alpha 204)\nBall topmost after hide/show and scale: PASS\n";
     }
 #endif
     void check_quick_children(){
@@ -363,6 +397,6 @@ struct Ui::Impl {
     static void smoke_finish(void* p){auto* a=static_cast<Impl*>(p);if(a->pending_notifications.count(0)){std::ofstream(a->data/"ui-exit.txt")<<"FAIL: notification callback never resolved\n";a->result=1;}else{a->capture("notification-result-render.ppm");std::ofstream(a->data/"ui-smoke.txt",std::ios::app)<<"Native round window region: PASS\nRound region after ball/main hide/show, move and 150 percent scale: PASS\nMain-page subtask check/reopen, board/narrow and draft protection: PASS\nMultiline padding and soft scrollbar drag: PASS\nInline menu start/urgent/shelve/resume/complete/delete/cancel: PASS\nFree-ball hover and draft preservation: PASS\nHappy/tired/urgent mood priority: PASS\nFallback acknowledgement and snooze: PASS\nSystem notification result: "<<(a->alerts.count(0)?"application fallback":"system confirmed")<<"\n";std::ofstream(a->data/"ui-exit.txt")<<"Smoke requested clean exit\n";}a->quit=true;}
     int run(){show();platform_opacity(window.get(),number("opacity",100));if(store.setting("desktop","0")=="1")guard([&]{apply_setting("desktop");});if(store.setting("hotkey_enabled","0")=="1")guard([&]{apply_setting("hotkey_enabled");});apply_ball();if(!smoke&&flag(1)&&(platform_tray_available()||ball->shown()))window->hide();if(smoke)Fl::add_timeout(0.8,smoke_tick,this);while(!quit){Fl::wait(30);process_deliveries();}deliveries.reset();return result;}
 };
-Ui::Ui(Store& store,const std::filesystem::path& data,bool smoke,const std::filesystem::path& anchor):impl_(std::make_unique<Impl>(store,data,smoke,anchor)){}
+Ui::Ui(Store& store,const std::filesystem::path& data,bool smoke,const std::filesystem::path& anchor,InstanceLock* instance):impl_(std::make_unique<Impl>(store,data,smoke,anchor,instance)){}
 Ui::~Ui()=default;
 int Ui::run(){return impl_->run();}

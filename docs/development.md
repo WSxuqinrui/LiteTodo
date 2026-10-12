@@ -6,10 +6,11 @@ Windows 默认 `%LOCALAPPDATA%\LiteTodoPrototype`；macOS 默认 `~/Library/Appl
 
 项目已命名为 LiteTodo，历史数据目录名保持兼容，现有任务可继续使用。
 
-- v1/v2/v3/v4 升级前生成 `tasks.sqlite3.pre-v5-时间戳.sqlite3`，再升级到 v5，新增搁置字段。原任务、子任务、附件、状态和提醒保留；交付日期不从提醒推断。
-- 开启自动备份后，程序运行期间每天一份 `backups/auto-YYYY-MM-DD.sqlite3`，仅保留最近 7 份该命名的自动快照；手工与导入前备份另外保留。
+- v1 至 v5 升级前生成 `tasks.sqlite3.pre-v6-时间戳.sqlite3`，再升级到 v6，保留搁置字段并新增修改令牌。原任务、子任务、附件、状态和提醒保留；交付日期不从提醒推断。v6 不能直接由旧版程序打开；需要退回旧版时使用升级前快照。
+- 每个实际数据目录只允许一个新版实例。重复启动请求已有窗口显示；不同目录可分别运行。保存前校验任务修改令牌，其他连接修改或导入后，旧草稿会提示冲突并保留，需取消后重新打开编辑。旧版程序没有实例锁，升级前请完全退出旧版。
+- 开启自动备份后，程序运行期间每天一份 `backups/auto-YYYY-MM-DD.sqlite3`，最多保留 7 份该命名的自动快照；系统日期回拨时优先保留当天刚创建的快照。手工与导入前备份另外保留。
 - 「立即备份」创建独立快照；导出输入完整文件路径，同名文件拒绝覆盖。导入在原文件的副本上校验结构及关联，确认后先备份当前库再替换，失败保留原数据。
-- 数据目录更改会复制数据库、记住启动位置、切换连接，原目录保留。新目录不能已有任务库或位置指向文件。启动位置记在原目录 `.litetodo-location`；迁移后不要删除这个文件。
+- 数据目录更改先锁定新目录，再复制数据库、记住启动位置、切换连接，原目录保留。新目录不能被另一实例使用，不能已有任务库或位置指向文件。发布启动位置失败时清理本次候选库，可修正问题后重试。启动位置记在原目录 `.litetodo-location`；迁移后不要删除这个文件。
 - 附件目录更改只影响新附件，已有附件保留原路径。数据库备份仅包含附件引用，换机时还要复制附件文件；删除任务不清理附件实体。
 
 ## 5 MB 口径
@@ -52,29 +53,30 @@ macOS（Xcode Command Line Tools；分别编译 arm64/x86_64）：
 
 ```sh
 cmake -S . -B build-macos -G Ninja -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DCMAKE_OSX_ARCHITECTURES=arm64
-cmake --build build-macos --target LiteTodo store_tests
+cmake --build build-macos --target LiteTodo store_tests reliability_tests
 ctest --test-dir build-macos --output-on-failure
 python scripts/package.py --binary build-macos/LiteTodo.app --platform macos-arm64
 ```
 
-macOS 通知需运行 `.app`；正式分发还需签名及公证。GitHub Actions 已通过 macOS Intel / Apple Silicon 的构建、测试与打包；尚未实机验收或签名、公证发布。
+macOS 通知需运行 `.app`；正式分发还需签名及公证。既有版本通过 macOS Intel / Apple Silicon 自动构建、测试与打包；0.4.2 的跨平台构建及桌面实机验收待核验。
 
 Linux（X11；Wayland 会话需 XWayland）：
 
 ```sh
 sudo apt install build-essential cmake ninja-build python3 libx11-dev libxext-dev libxinerama-dev libxfixes-dev libxft-dev libxcursor-dev libxrender-dev libpango1.0-dev libdbus-1-dev fonts-noto-cjk
 cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=MinSizeRel
-cmake --build build-linux --target LiteTodo store_tests
+cmake --build build-linux --target LiteTodo store_tests reliability_tests
 ctest --test-dir build-linux --output-on-failure
 python scripts/package.py --binary build-linux/LiteTodo --platform linux-x64
 ```
 
-Linux 使用系统图形及通知库，需在目标发行版执行 `ldd` 与运行检查；XEmbed 托盘和置顶能力由桌面环境决定。GitHub Actions 已通过 Linux 构建、测试与打包；尚未实机验收。
+Linux 使用系统图形及通知库，需在目标发行版执行 `ldd` 与运行检查；XEmbed 托盘和置顶能力由桌面环境决定。既有版本通过 Linux 自动构建、测试与打包；0.4.2 的跨平台构建及桌面实机验收待核验。
 
 ## 检查方法
 
-- CTest：Windows 65 项存储/路径检查，含 v5 搁置升级与持久化、暂停/恢复提醒、超过20项到期任务的排队排除、升级前备份、导入结构校验、批量整理、附件复制、目录迁移、自动备份保留、子任务关联与状态约束、提醒改期确认保护、中文/特殊字符搜索及一致备份。非 Windows 不执行专用的系统命令行解析检查。
-- `python tests/package_tests.py`：重复打包时排除旧便携数据并保留旧发布目录。
+- CTest：存储/路径、可靠性及 Windows 界面回归三组；覆盖 v6 升级、旧草稿冲突、编号复用、导入失效、迁移重试、日期回拨备份、子项拖动与滚动边界、浮球草稿保护及窗口恢复。非 Windows 不执行专用的系统命令行解析和界面合成检查。
+- `python tests/instance_process_tests.py --binary build-windows/LiteTodo.exe`：隔离启动多个实际进程，检查重复实例退出、唤起请求被消费及独立目录并行运行。
+- `python tests/package_tests.py`：按构建版本命名，重复打包时排除旧便携数据并保留旧发布目录。
 - `LiteTodo --ui-smoke --data-dir 独立空目录`：用虚构任务检查单窗口导航、卡片更多菜单全部动作及删除取消、直接开始、自由浮球悬停和草稿保留、表情优先级、原生圆形窗口区域、应用内提醒确认/延后及草稿保存不撤销延后、旧通知身份回执隔离；保留五种尺寸、子任务、附件、导入、合成 Ctrl+Enter 和正常退出检查。Windows 本机通知总开关关闭，实际测试路径使用应用内兜底；未把合成回执当成系统通知目视验收。
 - `scripts/verify-windows.py` 保存上述结果、实际控件渲染 PNG 和本次资源采样；控件离屏渲染不等于操作系统截图或真实输入验收。
 - 人工复核仍包括真实鼠标、中文输入法、混合 DPI 多屏、浮球拖动、睡眠唤醒和通知展示。Windows 结果不能替代其他系统验收。
